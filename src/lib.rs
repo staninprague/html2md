@@ -1,4 +1,5 @@
-//#![feature(alloc_system)]
+#![feature(alloc_system)]
+extern crate alloc_system;
 
 #[macro_use]
 extern crate lazy_static;
