@@ -13,6 +13,8 @@ build on default image:
   dependencies: []
   before_script: &common_compile_debian
     - apt-get update -qq && apt-get install -y -qq binutils
+    - rustup toolchain install nightly
+    - rustup default nightly
     - export CARGO_HOME="${PWD}/.cargo_cache"
   script: &common_script
     - cargo build --release
