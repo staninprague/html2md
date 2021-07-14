@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::os::raw::{c_char};
 use std::ffi::{CString, CStr};
 
-use regex::Regex;
+use regex::{Regex};
 
 use html5ever::parse_document;
 use html5ever::driver::ParseOpts;
@@ -48,6 +48,9 @@ use crate::iframes::IframeHandler;
 
 lazy_static! {
     static ref EXCESSIVE_WHITESPACE_PATTERN: Regex = Regex::new("\\s{2,}").unwrap();   // for HTML on-the-fly cleanup
+    static ref GOOGLE_SITE_SIDEBAR_PATTERN: Regex = Regex::new("(?m)<td id=\"sites-chrome-sidebar-left\".*?</td>").unwrap();   // for HTML on-the-fly cleanup
+    
+    static ref LOOSE_BREAK_PATTERN: Regex = Regex::new("<br/>").unwrap();   // for Markdown post-processing
 
     static ref EMPTY_LINE_PATTERN: Regex = Regex::new("(?m)^ +$").unwrap();            // for Markdown post-processing
     static ref EXCESSIVE_NEWLINE_PATTERN: Regex = Regex::new("\\n{3,}").unwrap();      // for Markdown post-processing
@@ -71,7 +74,7 @@ pub fn parse_html_custom(html: &str, custom: &HashMap<String, Box<dyn TagHandler
     let dom = parse_document(RcDom::default(), ParseOpts::default()).from_utf8().read_from(&mut html.as_bytes()).unwrap();
     let mut result = StructuredPrinter::default();
     walk(&dom.document, &mut result, custom);
-
+    println!("+++++ result: {}", &result.data);
     return clean_markdown(&result.data);
 }
 
@@ -92,7 +95,7 @@ pub fn parse_html_extended(html: &str) -> String {
         fn instantiate(&self) -> Box<dyn TagHandler> {
             return Box::new(HtmlCherryPickHandler::default());
         }
-    };
+    }
 
     let mut tag_factory: HashMap<String, Box<dyn TagHandlerFactory>> = HashMap::new();
     tag_factory.insert(String::from("span"), Box::new(SpanAsIsTagFactory{}));
@@ -125,9 +128,26 @@ fn walk(input: &Handle, result: &mut StructuredPrinter, custom: &HashMap<String,
                 if !inside_code {
                     text = escape_markdown(result, &text);
                 }
+
+                let inside_script = result.parent_chain.iter().any(|tag| tag == "script");
+                if inside_script {
+                    //println!("Inside script text: {}", &text);
+                    text = "".to_string();
+                }
+
+                let inside_style = result.parent_chain.iter().any(|tag| tag == "style");
+                if inside_style {
+                    //println!("Inside style text: {}", &text);
+                    text = "".to_string();
+                }
+
                 let minified_text = EXCESSIVE_WHITESPACE_PATTERN.replace_all(&text, " ");
                 let minified_text = minified_text.trim_matches(|ch: char| ch == '\n' || ch == '\r');
-                result.append_str(&minified_text);
+                if minified_text.len() > 0
+                {
+                    result.append_str(&minified_text);
+                }
+                
             }
         }
         NodeData::Comment { ref contents } => {},
@@ -232,7 +252,8 @@ fn escape_markdown(result: &StructuredPrinter, text: &str) -> String {
 /// Clears excessive punctuation that would be trimmed by renderer anyway
 fn clean_markdown(text: &str) -> String {
     // remove redundant newlines
-    let intermediate = EMPTY_LINE_PATTERN.replace_all(&text, "");                           // empty line with trailing spaces, replace with just newline
+    let intermediate = EMPTY_LINE_PATTERN.replace_all(&text, "");
+    //let intermediate = LOOSE_BREAK_PATTERN.replace_all(&intermediate, "\n");                               // empty line with trailing spaces, replace with just newline
     let intermediate = EXCESSIVE_NEWLINE_PATTERN.replace_all(&intermediate, "\n\n");  // > 3 newlines - not handled by markdown anyway
     let intermediate = TRAILING_SPACE_PATTERN.replace_all(&intermediate, "$1");       // trim space if it's just one
     let intermediate = LEADING_NEWLINES_PATTERN.replace_all(&intermediate, "");       // trim leading newlines
@@ -266,6 +287,7 @@ impl StructuredPrinter {
 
     /// Append string to the end of the printer
     pub fn append_str(&mut self, it: &str) {
+        println!("Appending to printer: {}", it);
         self.data.push_str(it);
     }
 
@@ -336,5 +358,20 @@ pub mod android {
         let markdown = parse_html_extended(&html_java);
         let output = env.new_string(markdown).expect("Couldn't create java string!");
         output.into_inner()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_finds_google_site_content() {
+        let regex = Regex::new("(?m)<td id=\"sites-chrome-sidebar-left\".*?</td>").unwrap();
+        let text = r#"<table><td id="sites-chrome-sidebar-left" aa="cc">
+        Sometjhing asidfndsifgn isdf g
+        </td></table>"#;
+        let text2 = r#"<table><td id="sites-chrome-sidebar-left" aa="cc">Sometjhing asidfndsifgn isdf g</td></table>"#;
+        let minified_text = regex.replace_all(text, "");
+        assert_eq!(minified_text, "<table></table>");
     }
 }
