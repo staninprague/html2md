@@ -1,55 +1,78 @@
 use lazy_static::lazy_static;
 
-use std::boxed::Box;
 use std::borrow::Borrow;
+use std::boxed::Box;
 use std::collections::HashMap;
 
-use std::os::raw::{c_char};
-use std::ffi::{CString, CStr};
+use regex::Regex;
 
-use regex::{Regex};
-
-use html5ever::parse_document;
 use html5ever::driver::ParseOpts;
+use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
 
-pub use markup5ever_rcdom::{RcDom, Handle, NodeData};
+pub use markup5ever_rcdom::{Handle, NodeData, RcDom};
 
-mod dummy;
 mod anchors;
-mod paragraphs;
-mod images;
-mod headers;
-mod lists;
-mod styles;
 mod codes;
-mod quotes;
-mod tables;
 mod containers;
+mod dummy;
+mod headers;
 mod iframes;
+mod images;
+mod lists;
+mod metas;
+mod paragraphs;
+mod quotes;
+mod styles;
+mod tables;
 
 pub mod common;
 
-use crate::dummy::DummyHandler;
-use crate::dummy::IdentityHandler;
-use crate::dummy::HtmlCherryPickHandler;
-use crate::paragraphs::ParagraphHandler;
 use crate::anchors::AnchorHandler;
-use crate::images::ImgHandler;
-use crate::headers::HeaderHandler;
-use crate::lists::ListItemHandler;
-use crate::lists::ListHandler;
-use crate::styles::StyleHandler;
 use crate::codes::CodeHandler;
-use crate::quotes::QuoteHandler;
-use crate::tables::TableHandler;
 use crate::containers::ContainerHandler;
+use crate::dummy::DummyHandler;
+use crate::dummy::HtmlCherryPickHandler;
+use crate::dummy::IdentityHandler;
+use crate::headers::HeaderHandler;
 use crate::iframes::IframeHandler;
+use crate::images::ImgHandler;
+use crate::lists::ListHandler;
+use crate::lists::ListItemHandler;
+use crate::metas::MetaHandler;
+use crate::paragraphs::ParagraphHandler;
+use crate::quotes::QuoteHandler;
+use crate::styles::StyleHandler;
+use crate::tables::TableHandler;
+
+#[derive(Clone, Default)]
+pub struct InputFilePath {
+    pub parent_dir: String,
+    pub filename_with_no_extension: String,
+}
+
+impl InputFilePath {
+    pub fn adjusted_url(&self, url: &str) -> String {
+        let mut adjusted_url = url.to_owned();
+
+        let own_directory_parent_path = format!("{}/", &self.filename_with_no_extension);
+
+        if adjusted_url.starts_with(&own_directory_parent_path) {
+            adjusted_url = adjusted_url.replace(&own_directory_parent_path, "");
+        } else if !adjusted_url.starts_with(&"http") {
+            adjusted_url = format!("../{}", adjusted_url);
+        }
+
+        adjusted_url = adjusted_url.replace(".html", "");
+
+        adjusted_url
+    }
+}
 
 lazy_static! {
     static ref EXCESSIVE_WHITESPACE_PATTERN: Regex = Regex::new("\\s{2,}").unwrap();   // for HTML on-the-fly cleanup
     static ref GOOGLE_SITE_SIDEBAR_PATTERN: Regex = Regex::new("(?m)<td id=\"sites-chrome-sidebar-left\".*?</td>").unwrap();   // for HTML on-the-fly cleanup
-    
+
     static ref LOOSE_BREAK_PATTERN: Regex = Regex::new("<br/>").unwrap();   // for Markdown post-processing
 
     static ref EMPTY_LINE_PATTERN: Regex = Regex::new("(?m)^ +$").unwrap();            // for Markdown post-processing
@@ -70,10 +93,17 @@ lazy_static! {
 /// # Arguments
 /// `html` is source HTML as `String`
 /// `custom` is custom tag hadler producers for tags you want, can be empty
-pub fn parse_html_custom(html: &str, custom: &HashMap<String, Box<dyn TagHandlerFactory>>) -> String {
-    let dom = parse_document(RcDom::default(), ParseOpts::default()).from_utf8().read_from(&mut html.as_bytes()).unwrap();
+pub fn parse_html_custom(
+    html: &str,
+    custom: &HashMap<String, Box<dyn TagHandlerFactory>>,
+    input_file_path: &InputFilePath,
+) -> String {
+    let dom = parse_document(RcDom::default(), ParseOpts::default())
+        .from_utf8()
+        .read_from(&mut html.as_bytes())
+        .unwrap();
     let mut result = StructuredPrinter::default();
-    walk(&dom.document, &mut result, custom);
+    walk(&dom.document, &mut result, custom, &input_file_path);
     println!("+++++ result: {}", &result.data);
     return clean_markdown(&result.data);
 }
@@ -82,14 +112,14 @@ pub fn parse_html_custom(html: &str, custom: &HashMap<String, Box<dyn TagHandler
 /// and returns converted string.
 /// # Arguments
 /// `html` is source HTML as `String`
-pub fn parse_html(html: &str) -> String {
-    parse_html_custom(html, &HashMap::default())
+pub fn parse_html(html: &str, input_file_path: &InputFilePath) -> String {
+    parse_html_custom(html, &HashMap::default(), input_file_path)
 }
 
 /// Same as `parse_html` but retains all "span" html elements intact
 /// Markdown parsers usually strip them down when rendering but they
 /// may be useful for later processing
-pub fn parse_html_extended(html: &str) -> String {
+pub fn parse_html_extended(html: &str, input_file_path: &InputFilePath) -> String {
     struct SpanAsIsTagFactory;
     impl TagHandlerFactory for SpanAsIsTagFactory {
         fn instantiate(&self) -> Box<dyn TagHandler> {
@@ -98,8 +128,8 @@ pub fn parse_html_extended(html: &str) -> String {
     }
 
     let mut tag_factory: HashMap<String, Box<dyn TagHandlerFactory>> = HashMap::new();
-    tag_factory.insert(String::from("span"), Box::new(SpanAsIsTagFactory{}));
-    return parse_html_custom(html, &tag_factory);
+    tag_factory.insert(String::from("span"), Box::new(SpanAsIsTagFactory {}));
+    return parse_html_custom(html, &tag_factory, input_file_path);
 }
 
 /// Recursively walk through all DOM tree and handle all elements according to
@@ -109,18 +139,26 @@ pub fn parse_html_extended(html: &str) -> String {
 /// `input` is DOM tree or its subtree
 /// `result` is output holder with position and context tracking
 /// `custom` is custom tag hadler producers for tags you want, can be empty
-fn walk(input: &Handle, result: &mut StructuredPrinter, custom: &HashMap<String, Box<dyn TagHandlerFactory>>) {
-    let mut handler : Box<dyn TagHandler> = Box::new(DummyHandler::default());
+fn walk(
+    input: &Handle,
+    result: &mut StructuredPrinter,
+    custom: &HashMap<String, Box<dyn TagHandlerFactory>>,
+    input_file_path: &InputFilePath,
+) {
+    let mut handler: Box<dyn TagHandler> = Box::new(DummyHandler::default());
     let mut tag_name = String::default();
     match input.data {
-        NodeData::Document | NodeData::Doctype {..} | NodeData::ProcessingInstruction {..} => {},
-        NodeData::Text { ref contents }  => {
+        NodeData::Document | NodeData::Doctype { .. } | NodeData::ProcessingInstruction { .. } => {}
+        NodeData::Text { ref contents } => {
             let mut text = contents.borrow().to_string();
             let inside_pre = result.parent_chain.iter().any(|tag| tag == "pre");
             if inside_pre {
                 // this is preformatted text, insert as-is
                 result.append_str(&text);
-            } else if !(text.trim().len() == 0 && (result.data.chars().last() == Some('\n') || result.data.chars().last() == Some(' '))) {
+            } else if !(text.trim().len() == 0
+                && (result.data.chars().last() == Some('\n')
+                    || result.data.chars().last() == Some(' ')))
+            {
                 // in case it's not just a whitespace after the newline or another whitespace
 
                 // regular text, collapse whitespace and newlines in text
@@ -141,23 +179,27 @@ fn walk(input: &Handle, result: &mut StructuredPrinter, custom: &HashMap<String,
                     text = "".to_string();
                 }
 
+                let inside_head = result.parent_chain.iter().any(|tag| tag == "head");
+                if inside_head {
+                    println!("Inside head text: {}", &text);
+                    text = "".to_string();
+                }
+
                 let minified_text = EXCESSIVE_WHITESPACE_PATTERN.replace_all(&text, " ");
                 let minified_text = minified_text.trim_matches(|ch: char| ch == '\n' || ch == '\r');
-                if minified_text.len() > 0
-                {
+                if minified_text.len() > 0 {
                     result.append_str(&minified_text);
                 }
-                
             }
         }
-        NodeData::Comment { ref contents } => {},
+        NodeData::Comment { ref contents } => {}
         NodeData::Element { ref name, .. } => {
             tag_name = name.local.to_string();
             let inside_pre = result.parent_chain.iter().any(|tag| tag == "pre");
             if inside_pre {
                 // don't add any html tags inside the pre section
                 handler = Box::new(DummyHandler::default());
-            }else if custom.contains_key(&tag_name) {
+            } else if custom.contains_key(&tag_name) {
                 // have user-supplied factory, instantiate a handler for this tag
                 let factory = custom.get(&tag_name).unwrap();
                 handler = factory.instantiate();
@@ -165,7 +207,9 @@ fn walk(input: &Handle, result: &mut StructuredPrinter, custom: &HashMap<String,
                 // no user-supplied factory, take one of built-in ones
                 handler = match tag_name.as_ref() {
                     // containers
-                    "div" | "section" | "header" | "footer" => Box::new(ContainerHandler::default()),
+                    "div" | "section" | "header" | "footer" => {
+                        Box::new(ContainerHandler::default())
+                    }
                     // pagination, breaks
                     "p" | "br" | "hr" => Box::new(ParagraphHandler::default()),
                     "q" | "cite" | "blockquote" => Box::new(QuoteHandler::default()),
@@ -176,7 +220,10 @@ fn walk(input: &Handle, result: &mut StructuredPrinter, custom: &HashMap<String,
                     "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => Box::new(HeaderHandler::default()),
                     "pre" | "code" => Box::new(CodeHandler::default()),
                     // images, links
-                    "img" => Box::new(ImgHandler::default()),
+                    "img" => Box::new(ImgHandler {
+                        block_mode: false,
+                        input_file_path: input_file_path.clone(),
+                    }),
                     "a" => Box::new(AnchorHandler::default()),
                     // lists
                     "ol" | "ul" | "menu" => Box::new(ListHandler::default()),
@@ -185,11 +232,15 @@ fn walk(input: &Handle, result: &mut StructuredPrinter, custom: &HashMap<String,
                     "sub" | "sup" => Box::new(IdentityHandler::default()),
                     // tables, handled fully internally as markdown can't have nested content in tables
                     // supports only single tables as of now
-                    "table" => Box::new(TableHandler::default()),
+                    "table" => Box::new(TableHandler {
+                        input_file_path: input_file_path.clone(),
+                    }),
                     "iframe" => Box::new(IframeHandler::default()),
                     // other
                     "html" | "head" | "body" => Box::new(DummyHandler::default()),
-                    _ => Box::new(DummyHandler::default())
+                    "title" => Box::new(DummyHandler::default()),
+                    "meta" => Box::new(MetaHandler::default()),
+                    _ => Box::new(DummyHandler::default()),
                 };
             }
         }
@@ -200,8 +251,8 @@ fn walk(input: &Handle, result: &mut StructuredPrinter, custom: &HashMap<String,
     handler.handle(&input, result);
 
     // save this tag name as parent for child nodes
-    result.parent_chain.push(tag_name.to_string());     // e.g. it was ["body"] and now it's ["body", "p"]
-    let current_depth = result.parent_chain.len();      // e.g. it was 1 and now it's 2
+    result.parent_chain.push(tag_name.to_string()); // e.g. it was ["body"] and now it's ["body", "p"]
+    let current_depth = result.parent_chain.len(); // e.g. it was 1 and now it's 2
 
     // create space for siblings of next level
     result.siblings.insert(current_depth, vec![]);
@@ -211,10 +262,14 @@ fn walk(input: &Handle, result: &mut StructuredPrinter, custom: &HashMap<String,
             continue;
         }
 
-        walk(child.borrow(), result, custom);
+        walk(child.borrow(), result, custom, input_file_path);
 
         match child.data {
-            NodeData::Element { ref name, .. } => result.siblings.get_mut(&current_depth).unwrap().push(name.local.to_string()),
+            NodeData::Element { ref name, .. } => result
+                .siblings
+                .get_mut(&current_depth)
+                .unwrap()
+                .push(name.local.to_string()),
             _ => {}
         };
     }
@@ -235,11 +290,15 @@ fn walk(input: &Handle, result: &mut StructuredPrinter, custom: &HashMap<String,
 /// like list start or bold text style
 fn escape_markdown(result: &StructuredPrinter, text: &str) -> String {
     // always escape bold/italic/strikethrough
-    let mut data = MARKDOWN_MIDDLE_KEYCHARS.replace_all(&text, "\\$0").to_string();
+    let mut data = MARKDOWN_MIDDLE_KEYCHARS
+        .replace_all(&text, "\\$0")
+        .to_string();
 
     // if we're at the start of the line we need to escape list- and quote-starting sequences
     if START_OF_LINE_PATTERN.is_match(&result.data) {
-        data = MARKDOWN_STARTONLY_KEYCHARS.replace(&data, "$1\\$2").to_string();
+        data = MARKDOWN_STARTONLY_KEYCHARS
+            .replace(&data, "$1\\$2")
+            .to_string();
     }
 
     // no handling of more complicated cases such as
@@ -254,10 +313,10 @@ fn clean_markdown(text: &str) -> String {
     // remove redundant newlines
     let intermediate = EMPTY_LINE_PATTERN.replace_all(&text, "");
     //let intermediate = LOOSE_BREAK_PATTERN.replace_all(&intermediate, "\n");                               // empty line with trailing spaces, replace with just newline
-    let intermediate = EXCESSIVE_NEWLINE_PATTERN.replace_all(&intermediate, "\n\n");  // > 3 newlines - not handled by markdown anyway
-    let intermediate = TRAILING_SPACE_PATTERN.replace_all(&intermediate, "$1");       // trim space if it's just one
-    let intermediate = LEADING_NEWLINES_PATTERN.replace_all(&intermediate, "");       // trim leading newlines
-    let intermediate = LAST_WHITESPACE_PATTERN.replace_all(&intermediate, "");        // trim last newlines
+    let intermediate = EXCESSIVE_NEWLINE_PATTERN.replace_all(&intermediate, "\n\n"); // > 3 newlines - not handled by markdown anyway
+    let intermediate = TRAILING_SPACE_PATTERN.replace_all(&intermediate, "$1"); // trim space if it's just one
+    let intermediate = LEADING_NEWLINES_PATTERN.replace_all(&intermediate, ""); // trim leading newlines
+    let intermediate = LAST_WHITESPACE_PATTERN.replace_all(&intermediate, ""); // trim last newlines
 
     return intermediate.into_owned();
 }
@@ -279,7 +338,6 @@ pub struct StructuredPrinter {
 }
 
 impl StructuredPrinter {
-
     /// Inserts newline
     pub fn insert_newline(&mut self) {
         self.append_str("\n");
@@ -322,17 +380,8 @@ pub trait TagHandler {
     }
 }
 
-/// FFI variant for HTML -> Markdown conversion for calling from other languages
-#[no_mangle]
-pub extern fn parse(html: *const c_char) -> *const c_char {
-    let in_html = unsafe { CStr::from_ptr(html) };
-    let out_md = parse_html(&in_html.to_string_lossy());
-
-    CString::new(out_md).unwrap().into_raw()
-}
-
 /// Expose the JNI interface for android below
-#[cfg(target_os="android")]
+#[cfg(target_os = "android")]
 #[allow(non_snake_case)]
 pub mod android {
     extern crate jni;
@@ -340,23 +389,41 @@ pub mod android {
     use super::parse_html;
     use super::parse_html_extended;
 
-    use self::jni::JNIEnv;
     use self::jni::objects::{JClass, JString};
     use self::jni::sys::jstring;
+    use self::jni::JNIEnv;
 
     #[no_mangle]
-    pub unsafe extern fn Java_com_kanedias_html2md_Html2Markdown_parse(env: JNIEnv, _clazz: JClass, html: JString) -> jstring {
-        let html_java : String = env.get_string(html).expect("Couldn't get java string!").into();
+    pub unsafe extern "C" fn Java_com_kanedias_html2md_Html2Markdown_parse(
+        env: JNIEnv,
+        _clazz: JClass,
+        html: JString,
+    ) -> jstring {
+        let html_java: String = env
+            .get_string(html)
+            .expect("Couldn't get java string!")
+            .into();
         let markdown = parse_html(&html_java);
-        let output = env.new_string(markdown).expect("Couldn't create java string!");
+        let output = env
+            .new_string(markdown)
+            .expect("Couldn't create java string!");
         output.into_inner()
     }
 
     #[no_mangle]
-    pub unsafe extern fn Java_com_kanedias_html2md_Html2Markdown_parseExtended(env: JNIEnv, _clazz: JClass, html: JString) -> jstring {
-        let html_java : String = env.get_string(html).expect("Couldn't get java string!").into();
+    pub unsafe extern "C" fn Java_com_kanedias_html2md_Html2Markdown_parseExtended(
+        env: JNIEnv,
+        _clazz: JClass,
+        html: JString,
+    ) -> jstring {
+        let html_java: String = env
+            .get_string(html)
+            .expect("Couldn't get java string!")
+            .into();
         let markdown = parse_html_extended(&html_java);
-        let output = env.new_string(markdown).expect("Couldn't create java string!");
+        let output = env
+            .new_string(markdown)
+            .expect("Couldn't create java string!");
         output.into_inner()
     }
 }
@@ -370,7 +437,7 @@ mod tests {
         let text = r#"<table><td id="sites-chrome-sidebar-left" aa="cc">
         Sometjhing asidfndsifgn isdf g
         </td></table>"#;
-        let text2 = r#"<table><td id="sites-chrome-sidebar-left" aa="cc">Sometjhing asidfndsifgn isdf g</td></table>"#;
+        let _text2 = r#"<table><td id="sites-chrome-sidebar-left" aa="cc">Sometjhing asidfndsifgn isdf g</td></table>"#;
         let minified_text = regex.replace_all(text, "");
         assert_eq!(minified_text, "<table></table>");
     }

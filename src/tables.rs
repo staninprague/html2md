@@ -1,3 +1,5 @@
+use crate::InputFilePath;
+
 use super::StructuredPrinter;
 use super::TagHandler;
 use super::{clean_markdown, walk};
@@ -6,8 +8,9 @@ use std::{cmp, collections::HashMap};
 
 use markup5ever_rcdom::{Handle, NodeData};
 
-#[derive(Default)]
-pub(super) struct TableHandler;
+pub(super) struct TableHandler {
+    pub(crate) input_file_path: InputFilePath,
+}
 
 static TABLE_PIPE: char = ' ';
 static TABLE_PAD: &str = "";
@@ -49,7 +52,7 @@ impl TagHandler for TableHandler {
                 for index in 0..column_count {
                     // from regular rows
                     if let Some(cell) = cells.get(index) {
-                        let text = to_text(cell);
+                        let text = to_text(cell, &self.input_file_path);
                         column_widths[index] = cmp::max(column_widths[index], text.chars().count());
                     }
                 }
@@ -69,8 +72,11 @@ impl TagHandler for TableHandler {
 
             table_markup.push(TABLE_PIPE);
             for index in 0..column_count {
-                let padded_header_text =
-                    pad_cell_text(&header_cells.get(index), column_widths[index]);
+                let padded_header_text = pad_cell_text(
+                    &header_cells.get(index),
+                    column_widths[index],
+                    &self.input_file_path,
+                );
                 table_markup.push_str(&padded_header_text);
                 table_markup.push(TABLE_PIPE);
             }
@@ -158,20 +164,16 @@ impl TagHandler for TableHandler {
                                     // table_markup.push(TABLE_PIPE);
                                 }
                             } else {
-                                let padded_cell_text =
-                                    pad_cell_text(&Some(cell), column_widths[index]);
-                                println!("*** Pushing padded cell text: {}", padded_cell_text);
+                                let padded_cell_text = pad_cell_text(
+                                    &Some(cell),
+                                    column_widths[index],
+                                    &self.input_file_path,
+                                );
                                 table_markup.push_str(&padded_cell_text);
                                 table_markup.push(TABLE_PIPE);
                             }
                         }
-                        _ => {
-                            // let padded_cell_text =
-                            //     pad_cell_text(&Some(cell), column_widths[index]);
-                            //     println!("**** Pushing {}", padded_cell_text);
-                            // table_markup.push_str(&padded_cell_text);
-                            // table_markup.push(TABLE_PIPE);
-                        }
+                        _ => {}
                     }
                 }
             }
@@ -195,11 +197,15 @@ impl TagHandler for TableHandler {
 /// `tag` - optional reference to currently processed handle, text is extracted from here
 ///
 /// `column_width` - precomputed column width to compute padding length from
-fn pad_cell_text(tag: &Option<&Handle>, column_width: usize) -> String {
+fn pad_cell_text(
+    tag: &Option<&Handle>,
+    column_width: usize,
+    input_file_path: &InputFilePath,
+) -> String {
     let mut result = String::new();
     if let Some(cell) = tag {
         // have header at specified position
-        let text = to_text(cell);
+        let text = to_text(cell, input_file_path);
         println!("cell text: {}", text);
         // compute difference between width and text length
         let len_diff = column_width - text.chars().count();
@@ -276,9 +282,9 @@ where
 
 /// Convert html tag to text. This collects all tag children in correct order where they're observed
 /// and concatenates their text, recursively.
-fn to_text(tag: &Handle) -> String {
+fn to_text(tag: &Handle, input_file_path: &InputFilePath) -> String {
     let mut printer = StructuredPrinter::default();
-    walk(tag, &mut printer, &HashMap::default());
+    walk(tag, &mut printer, &HashMap::default(), input_file_path);
     print!("((( Walk result: {}", &printer.data);
     let result = clean_markdown(&printer.data);
     return result;
