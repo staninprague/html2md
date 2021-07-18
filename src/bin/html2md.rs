@@ -33,12 +33,12 @@ fn main() -> std::io::Result<()> {
             .next_back()
             .expect("parent directory should be present for the input file.")
         {
-            println!(
-                "Path last component without extension: {:?}",
-                &file_name_without_extension
-            );
+            // println!(
+            //     "Path last component without extension: {:?}",
+            //     &file_name_without_extension
+            // );
 
-            println!("Path pre-last component: {:?}", &path_prefix);
+            //println!("Path pre-last component: {:?}", &path_prefix);
 
             let mut file_in = File::open(path)?;
 
@@ -57,7 +57,7 @@ fn main() -> std::io::Result<()> {
                 .as_bytes(),
             )?;
 
-            println!("Done!");
+            //println!("Done!");
         }
     }
 

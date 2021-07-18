@@ -155,7 +155,7 @@ impl TagHandler for TableHandler {
                                 .iter()
                                 .find(|&a| a.name.local.to_string() == "id")
                             {
-                                println!("Cell id: {:?}", tag_id);
+                                //println!("Cell id: {:?}", tag_id);
                                 if tag_id.value.to_string() != "sites-chrome-sidebar-left" {
                                     // let padded_cell_text =
                                     //     pad_cell_text(&Some(cell), column_widths[index]);
@@ -206,7 +206,7 @@ fn pad_cell_text(
     if let Some(cell) = tag {
         // have header at specified position
         let text = to_text(cell, input_file_path);
-        println!("cell text: {}", text);
+        //println!("cell text: {}", text);
         // compute difference between width and text length
         let len_diff = column_width - text.chars().count();
         if len_diff > 0 {
@@ -232,7 +232,7 @@ fn pad_cell_text(
         let pad_len = column_width;
         result.push_str(&TABLE_SPACE.repeat(pad_len));
     }
-    println!("padded cell text: {}", result);
+    //println!("padded cell text: {}", result);
     return result;
 }
 
@@ -285,7 +285,7 @@ where
 fn to_text(tag: &Handle, input_file_path: &InputFilePath) -> String {
     let mut printer = StructuredPrinter::default();
     walk(tag, &mut printer, &HashMap::default(), input_file_path);
-    print!("((( Walk result: {}", &printer.data);
+    //println!("((( Walk result: {}", &printer.data);
     let result = clean_markdown(&printer.data);
     return result;
     //return result.replace("\n", "<br/>");

@@ -11,7 +11,7 @@ pub(super) struct MetaHandler {
 
 impl TagHandler for MetaHandler {
     fn handle(&mut self, tag: &Handle, printer: &mut StructuredPrinter) {
-        println!("In the meta handler: {:?}", tag);
+        //println!("In the meta handler: {:?}", tag);
         match tag.data {
             NodeData::Element {
                 ref name,
@@ -28,7 +28,7 @@ impl TagHandler for MetaHandler {
                             .iter()
                             .find(|&a| a.name.local.to_string() == "content")
                         {
-                            println!("In the meta title: {:?}", &content.value);
+                            //println!("In the meta title: {:?}", &content.value);
                             has_meta_title = true;
                             printer.insert_newline();
                             printer.append_str("---");

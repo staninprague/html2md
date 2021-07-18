@@ -76,9 +76,13 @@ lazy_static! {
     static ref LOOSE_BREAK_PATTERN: Regex = Regex::new("<br/>").unwrap();   // for Markdown post-processing
 
     static ref EMPTY_LINE_PATTERN: Regex = Regex::new("(?m)^ +$").unwrap();            // for Markdown post-processing
+    static ref EMPTY_LINK_PATTERN: Regex = Regex::new("\\[\\]\\(\\)").unwrap();            // for Markdown post-processing
+
     static ref EXCESSIVE_NEWLINE_PATTERN: Regex = Regex::new("\\n{3,}").unwrap();      // for Markdown post-processing
     static ref TRAILING_SPACE_PATTERN: Regex = Regex::new("(?m)(\\S) $").unwrap();     // for Markdown post-processing
+    static ref EMPTY_HEADER_PATTERN: Regex = Regex::new("(?m)^\\s?#+\\s?$").unwrap();     // for Markdown post-processing
     static ref LEADING_NEWLINES_PATTERN: Regex = Regex::new("^\\n+").unwrap();         // for Markdown post-processing
+    static ref LEADING_WHITESPACE_PATTERN: Regex = Regex::new("^ +").unwrap();         // for Markdown post-processing
     static ref LAST_WHITESPACE_PATTERN: Regex = Regex::new("\\s+$").unwrap();          // for Markdown post-processing
 
     static ref START_OF_LINE_PATTERN: Regex = Regex::new("(^|\\n) *$").unwrap();                  // for Markdown escaping
@@ -104,7 +108,7 @@ pub fn parse_html_custom(
         .unwrap();
     let mut result = StructuredPrinter::default();
     walk(&dom.document, &mut result, custom, &input_file_path);
-    println!("+++++ result: {}", &result.data);
+    //println!("+++++ result: {}", &result.data);
     return clean_markdown(&result.data);
 }
 
@@ -181,7 +185,7 @@ fn walk(
 
                 let inside_head = result.parent_chain.iter().any(|tag| tag == "head");
                 if inside_head {
-                    println!("Inside head text: {}", &text);
+                    //println!("Inside head text: {}", &text);
                     text = "".to_string();
                 }
 
@@ -192,7 +196,7 @@ fn walk(
                 }
             }
         }
-        NodeData::Comment { ref contents } => {}
+        NodeData::Comment { contents: _ } => {}
         NodeData::Element { ref name, .. } => {
             tag_name = name.local.to_string();
             let inside_pre = result.parent_chain.iter().any(|tag| tag == "pre");
@@ -312,11 +316,13 @@ fn escape_markdown(result: &StructuredPrinter, text: &str) -> String {
 fn clean_markdown(text: &str) -> String {
     // remove redundant newlines
     let intermediate = EMPTY_LINE_PATTERN.replace_all(&text, "");
-    //let intermediate = LOOSE_BREAK_PATTERN.replace_all(&intermediate, "\n");                               // empty line with trailing spaces, replace with just newline
+    let intermediate = EMPTY_LINK_PATTERN.replace_all(&intermediate, ""); // remove empty links
     let intermediate = EXCESSIVE_NEWLINE_PATTERN.replace_all(&intermediate, "\n\n"); // > 3 newlines - not handled by markdown anyway
     let intermediate = TRAILING_SPACE_PATTERN.replace_all(&intermediate, "$1"); // trim space if it's just one
     let intermediate = LEADING_NEWLINES_PATTERN.replace_all(&intermediate, ""); // trim leading newlines
+    let intermediate = LEADING_WHITESPACE_PATTERN.replace_all(&intermediate, ""); // trim leading whitespaces
     let intermediate = LAST_WHITESPACE_PATTERN.replace_all(&intermediate, ""); // trim last newlines
+    let intermediate = EMPTY_HEADER_PATTERN.replace_all(&intermediate, ""); // trim empty headers
 
     return intermediate.into_owned();
 }
@@ -345,7 +351,7 @@ impl StructuredPrinter {
 
     /// Append string to the end of the printer
     pub fn append_str(&mut self, it: &str) {
-        println!("Appending to printer: {}", it);
+        //println!("Appending to printer: {}", it);
         self.data.push_str(it);
     }
 
