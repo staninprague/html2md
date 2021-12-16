@@ -27,7 +27,7 @@ fn main() -> std::io::Result<()> {
         .to_str()
     {
         // Skip over the file name
-        &path_iter.next_back();
+        let _ = &path_iter.next_back();
 
         if let Some(path_prefix) = &path_iter
             .next_back()
